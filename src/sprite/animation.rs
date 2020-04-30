@@ -99,7 +99,6 @@ impl<Item> Animation<Item> {
 
         if !self.durations.is_empty() {
             let mut lag = self.current_time % 1.0 * self.durations[self.current_frame()];
-
             lag += elapsed / 60.0 * 1000.0;
 
             while lag < 0.0 {
@@ -107,10 +106,9 @@ impl<Item> Animation<Item> {
                 lag += self.durations[self.current_frame()];
             }
 
-            let sign = (self.speed * dt).signum();
-
             self.current_time = self.current_time.floor();
 
+            let sign = elapsed.signum();
             while lag >= self.durations[self.current_frame()] {
                 lag -= self.durations[self.current_frame()] * sign;
                 self.current_time += sign;
@@ -134,10 +132,7 @@ impl<Item> Animation<Item> {
         } else if prev != frame {
             let a = self.speed > 0.0 && frame < prev;
             let b = self.speed < 0.0 && frame > prev;
-
-            let is = self.looped && (a || b);
-
-            Some((frame, is))
+            Some((frame, self.looped && (a || b)))
         } else {
             None
         }

@@ -1,147 +1,158 @@
+mod swap_chain;
+
 pub use winit;
 
+use crate::app::swap_chain::SwapChain;
+use crate::target::Target;
 use winit::{
-    event::{Event, WindowEvent},
-    event_loop::{ControlFlow, EventLoop, EventLoopWindowTarget},
-    monitor::MonitorHandle,
+    dpi::PhysicalSize,
+    event::{Event, StartCause, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
     window::Window,
 };
 
-pub struct Target<'a> {
-    pub view: &'a wgpu::TextureView,
-    pub width: u32,
-    pub height: u32,
-    pub scale: f32,
+pub struct Options {
+    pub power_preference: wgpu::PowerPreference,
+    pub backends: wgpu::BackendBit,
+
+    pub extensions: wgpu::Extensions,
+    pub limits: wgpu::Limits,
+
+    pub format: wgpu::TextureFormat,
+    pub present_mode: wgpu::PresentMode,
 }
 
-pub trait Game: 'static + Sized {
-    fn start(device: &wgpu::Device, queue: &wgpu::Queue) -> Self;
-    fn update(&mut self, event: WindowEvent, control_flow: &mut ControlFlow);
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: Target);
-}
-
-impl<T: Game> Application for T {
-    type UserEvent = ();
-
-    fn build_window(
-        event_loop: &EventLoopWindowTarget<Self::UserEvent>,
-        _primary_monitor: MonitorHandle,
-    ) -> Window {
-        Window::new(event_loop).unwrap()
-    }
-
-    fn init(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
-        Self::start(device, queue)
-    }
-
-    fn update(&mut self, event: WindowEvent, control_flow: &mut ControlFlow) {
-        Game::update(self, event, control_flow);
-    }
-
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: Target) {
-        Game::render(self, device, queue, target);
-    }
-}
-
-pub trait Application: 'static + Sized {
-    type UserEvent: 'static;
-
-    fn build_window(
-        event_loop: &EventLoopWindowTarget<Self::UserEvent>,
-        _primary_monitor: MonitorHandle,
-    ) -> Window {
-        Window::new(event_loop).unwrap()
-    }
-
-    fn init(device: &wgpu::Device, queue: &wgpu::Queue) -> Self;
-    fn update(&mut self, event: WindowEvent, control_flow: &mut ControlFlow);
-    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: Target);
-}
-
-pub fn run<App: Application>() {
-    let event_loop: EventLoop<App::UserEvent> = EventLoop::with_user_event();
-    let primary_monitor = event_loop.primary_monitor();
-    let window = App::build_window(&event_loop, primary_monitor);
-
-    futures::executor::block_on(run_async::<App>(event_loop, window));
-}
-
-async fn run_async<App: Application>(event_loop: EventLoop<App::UserEvent>, window: Window) {
-    let (size, surface) = {
-        let size = window.inner_size();
-        let surface = wgpu::Surface::create(&window);
-        (size, surface)
-    };
-
-    let adapter = wgpu::Adapter::request(
-        &wgpu::RequestAdapterOptions {
+impl Default for Options {
+    fn default() -> Self {
+        Self {
             power_preference: wgpu::PowerPreference::Default,
-            compatible_surface: Some(&surface),
-        },
-        wgpu::BackendBit::PRIMARY,
-    )
-    .await
-    .unwrap();
+            backends: wgpu::BackendBit::PRIMARY,
 
-    let (device, queue) = adapter
-        .request_device(&wgpu::DeviceDescriptor {
             extensions: wgpu::Extensions {
                 anisotropic_filtering: false,
             },
             limits: wgpu::Limits::default(),
-        })
-        .await;
 
-    let mut app = App::init(&device, &queue);
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            present_mode: wgpu::PresentMode::Mailbox,
+        }
+    }
+}
 
-    let mut sc_desc = wgpu::SwapChainDescriptor {
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-        format: wgpu::TextureFormat::Bgra8UnormSrgb,
-        width: size.width,
-        height: size.height,
-        present_mode: wgpu::PresentMode::Mailbox,
+pub trait Game: 'static + Sized {
+    type UserEvent: 'static;
+
+    fn start(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        format: wgpu::TextureFormat,
+        size: PhysicalSize<u32>,
+        scale_factor: f64,
+    ) -> Self;
+    fn update(&mut self, event: WindowEvent, control_flow: &mut ControlFlow);
+    fn render(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, target: Target);
+}
+
+pub fn exit_helper(event: &WindowEvent, control_flow: &mut ControlFlow) {
+    use winit::event::{ElementState::Pressed, VirtualKeyCode::Escape};
+
+    match event {
+        WindowEvent::KeyboardInput { input, .. } => {
+            if input.virtual_keycode == Some(Escape) && input.state == Pressed {
+                *control_flow = ControlFlow::Exit
+            }
+        }
+        WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+        _ => (),
+    }
+}
+
+pub fn run<App: Game>(event_loop: EventLoop<App::UserEvent>, window: Window, options: Options) {
+    futures::executor::block_on(run_async::<App>(event_loop, window, options));
+}
+
+async fn run_async<App: Game>(
+    event_loop: EventLoop<App::UserEvent>,
+    window: Window,
+    options: Options,
+) {
+    let (device, queue, mut swap_chain, mut app) = {
+        let Options {
+            power_preference,
+            backends,
+
+            extensions,
+            limits,
+
+            format,
+            present_mode,
+        } = options;
+
+        let size = window.inner_size();
+        let scale_factor = window.scale_factor();
+        let surface = wgpu::Surface::create(&window);
+
+        let options = wgpu::RequestAdapterOptions {
+            power_preference,
+            compatible_surface: Some(&surface),
+        };
+
+        let (device, queue) = wgpu::Adapter::request(&options, backends)
+            .await
+            .unwrap()
+            .request_device(&wgpu::DeviceDescriptor { extensions, limits })
+            .await;
+
+        let sc = SwapChain::new(&device, surface, size, scale_factor, format, present_mode);
+        let app = App::start(&device, &queue, format, size, scale_factor);
+        (device, queue, sc, app)
     };
-    let mut swap_chain = device.create_swap_chain(&surface, &sc_desc);
-
-    let mut scale_factror = window.scale_factor();
 
     event_loop.run(move |event, _, control_flow| {
         *control_flow = ControlFlow::Poll;
 
         match event {
+            Event::NewEvents(StartCause::Init) => {}
+            Event::NewEvents(StartCause::Poll) => {}
+            Event::NewEvents(StartCause::ResumeTimeReached { .. }) => {}
+            Event::NewEvents(StartCause::WaitCancelled { .. }) => {}
+
             Event::WindowEvent { event, window_id } => {
                 if window_id == window.id() {
-                    match event {
-                        WindowEvent::Resized(size) => {
-                            sc_desc.width = size.width;
-                            sc_desc.height = size.height;
-                            scale_factror = window.scale_factor();
-                            swap_chain = device.create_swap_chain(&surface, &sc_desc);
-                        }
-                        _ => (),
+                    if let WindowEvent::Resized(size) = event {
+                        swap_chain.resize(&device, size)
+                    }
+                    if let WindowEvent::ScaleFactorChanged { scale_factor, .. } = event {
+                        swap_chain.scale_factor = scale_factor;
                     }
 
                     app.update(event, control_flow);
                 }
             }
+
+            Event::DeviceEvent { .. } => {}
+            Event::UserEvent(_event) => {}
+            Event::Suspended => {}
+            Event::Resumed => {}
+
             Event::MainEventsCleared => window.request_redraw(),
             Event::RedrawRequested(window_id) => {
                 if window_id == window.id() {
-                    let frame = swap_chain
-                        .get_next_texture()
-                        .expect("Timeout when acquiring next swap chain texture");
+                    let frame = swap_chain.next_frame();
 
                     let target = Target {
                         view: &frame.view,
-                        width: sc_desc.width,
-                        height: sc_desc.height,
-                        scale: scale_factror as f32,
+                        width: swap_chain.size.width,
+                        height: swap_chain.size.height,
+                        scale: swap_chain.scale_factor as f32,
                     };
 
                     app.render(&device, &queue, target);
                 }
             }
-            _ => {}
+            Event::RedrawEventsCleared => {}
+
+            Event::LoopDestroyed => {}
         }
     });
 }

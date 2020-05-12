@@ -1,22 +1,21 @@
 use pixi::{
-    app::winit::{dpi::PhysicalSize, event::WindowEvent, event_loop::ControlFlow},
+    app::{ControlFlow, EventLoop, LogicalSize, PhysicalSize, WindowBuilder, WindowEvent},
     blend::{self, Blend},
-    default_sampler,
-    image::ImageLoader,
+    linear_sampler,
+    image::{ImageBindGroup, ImageLoader},
     layout::{Layout, Shader},
-    math::projection,
-    target::RenderTarget,
-    target::Target,
+    sprite::SpritePipeline,
+    target::{RenderTarget, Target},
     wgpu,
 };
 
 fn main() {
-    let event_loop = winit::event_loop::EventLoop::new();
+    let event_loop = EventLoop::new();
 
     let [width, height] = [500, 300];
-    let window = winit::window::WindowBuilder::new()
+    let window = WindowBuilder::new()
         .with_title("Blending & Compositing Example")
-        .with_inner_size(winit::dpi::LogicalSize::new(width, height))
+        .with_inner_size(LogicalSize::new(width, height))
         .build(&event_loop)
         .unwrap();
 
@@ -50,35 +49,34 @@ impl Quad {
     }
 }
 
-struct Pipeline {
-    src: wgpu::RenderPipeline,
-    src_atop: wgpu::RenderPipeline,
-    src_over: wgpu::RenderPipeline,
-    src_in: wgpu::RenderPipeline,
-    src_out: wgpu::RenderPipeline,
+struct BlendPipeline {
+    src: SpritePipeline,
+    src_atop: SpritePipeline,
+    src_over: SpritePipeline,
+    src_in: SpritePipeline,
+    src_out: SpritePipeline,
 
-    dst: wgpu::RenderPipeline,
-    dst_atop: wgpu::RenderPipeline,
-    dst_over: wgpu::RenderPipeline,
-    dst_in: wgpu::RenderPipeline,
-    dst_out: wgpu::RenderPipeline,
+    dst: SpritePipeline,
+    dst_atop: SpritePipeline,
+    dst_over: SpritePipeline,
+    dst_in: SpritePipeline,
+    dst_out: SpritePipeline,
 
-    clear: wgpu::RenderPipeline,
-    xor: wgpu::RenderPipeline,
-    add: wgpu::RenderPipeline,
-    mul: wgpu::RenderPipeline,
-    screen: wgpu::RenderPipeline,
+    clear: SpritePipeline,
+    xor: SpritePipeline,
+    add: SpritePipeline,
+    mul: SpritePipeline,
+    screen: SpritePipeline,
 }
 
-impl Pipeline {
+impl BlendPipeline {
     fn new(
         device: &wgpu::Device,
         layout: &Layout,
         shader: &Shader,
         format: wgpu::TextureFormat,
     ) -> Self {
-        let create =
-            |blend: Blend| layout.create_pipeline(device, &shader, blend.into_color_state(format));
+        let create = |blend: Blend| SpritePipeline::new(device, &layout, &shader, format, blend);
 
         Self {
             src: create(blend::PMA_SRC),
@@ -104,17 +102,17 @@ impl Pipeline {
 
 struct Blending {
     layout: Layout,
-    pipeline: Pipeline,
+    pipeline: BlendPipeline,
     quad: Quad,
 
-    replace_pipeline: wgpu::RenderPipeline,
-    normal_pipeline: wgpu::RenderPipeline,
+    normal: SpritePipeline,
+    replace: SpritePipeline,
 
     target: RenderTarget,
 
-    bg_bind_group: wgpu::BindGroup,
-    dst_bind_group: wgpu::BindGroup,
-    src_bind_group: wgpu::BindGroup,
+    bg_bind_group: ImageBindGroup,
+    dst_bind_group: ImageBindGroup,
+    src_bind_group: ImageBindGroup,
 }
 
 impl pixi::app::Game for Blending {
@@ -129,46 +127,39 @@ impl pixi::app::Game for Blending {
     ) -> Self {
         let layout = Layout::new(device);
 
-        let images = [
+        let path = [
             "examples/assets/blending/bg.png",
             "examples/assets/blending/dst.png",
             "examples/assets/blending/src.png",
         ];
 
-        let sampler = default_sampler(device);
+        let sampler = linear_sampler(device);
 
         let mut loader = ImageLoader::new(device);
-        let bg = loader.srgb_premul(device, images[0]).unwrap();
-        let dst = loader.srgb_premul(device, images[1]).unwrap();
-        let src = loader.srgb_premul(device, images[2]).unwrap();
+        let bg = loader.srgb_premul(device, path[0]).unwrap();
+        let dst = loader.srgb_premul(device, path[1]).unwrap();
+        let src = loader.srgb_premul(device, path[2]).unwrap();
         queue.submit(&[loader.finish()]);
 
-        let bg = bg.texture.create_default_view();
-        let src = src.texture.create_default_view();
-        let dst = dst.texture.create_default_view();
-
-        let bg_bind_group = layout.bind_combined(device, &bg, &sampler);
-        let dst_bind_group = layout.bind_combined(device, &dst, &sampler);
-        let src_bind_group = layout.bind_combined(device, &src, &sampler);
+        let bg_bind_group = layout.bind_image(device, &bg, &sampler);
+        let dst_bind_group = layout.bind_image(device, &dst, &sampler);
+        let src_bind_group = layout.bind_image(device, &src, &sampler);
 
         let shader = Shader::new(device);
 
-        let pipeline = Pipeline::new(device, &layout, &shader, format);
+        let pipeline = BlendPipeline::new(device, &layout, &shader, format);
         let target = RenderTarget::new(device, &layout, &sampler, format, 100, 100);
 
-        let shader = Shader::new(device);
-        let normal_pipeline =
-            layout.create_pipeline(device, &shader, blend::PMA_NORMAL.into_color_state(format));
-        let replace_pipeline =
-            layout.create_pipeline(device, &shader, blend::REPLACE.into_color_state(format));
+        let normal = SpritePipeline::normal(device, &layout, &shader, format);
+        let replace = SpritePipeline::replace(device, &layout, &shader, format);
 
         Self {
             layout,
             pipeline,
             quad: Quad::new(device),
 
-            normal_pipeline,
-            replace_pipeline,
+            normal,
+            replace,
 
             target,
 
@@ -221,39 +212,35 @@ impl pixi::app::Game for Blending {
         ];
 
         for (i, pipeline) in pipelines.iter().enumerate() {
-            let target_bind_group = self.target.bind_projection(device, &self.layout, 1.0);
-            let mut rpass = self.target.pass(&mut encoder);
+            let rt_bind_group = self.target.target(1.0).projection(device, &self.layout);
+
+            let mut rpass = self.target.clear_pass(&mut encoder);
 
             rpass.set_vertex_buffer(0, &self.quad.vtx_buffer, 0, 0);
             rpass.set_index_buffer(&self.quad.idx_buffer, 0, 0);
-            rpass.set_bind_group(0, &target_bind_group, &[]);
+            rpass.set_bind_group(0, &rt_bind_group, &[]);
 
-            draw_quad(&mut rpass, &self.pipeline.src, &self.dst_bind_group);
-            draw_quad(&mut rpass, pipeline, &self.src_bind_group);
+            draw_quad(
+                &mut rpass,
+                &self.pipeline.src.pipeline,
+                &self.dst_bind_group,
+            );
+            draw_quad(&mut rpass, &pipeline.pipeline, &self.src_bind_group);
 
             drop(rpass);
+
+            let target = Target {
+                width: (100.0 * target.scale) as u32,
+                height: (100.0 * target.scale) as u32,
+                ..target
+            };
+
+            let proj_bind_group = target.projection(device, &self.layout);
 
             let scale = target.scale;
             let [w, h] = [100.0 * scale, 100.0 * scale];
 
-            let proj_bind_group = {
-                let [width, height, scale] = [w, h, scale];
-                let usage = wgpu::BufferUsage::UNIFORM;
-                let data = projection(0.0, 0.0, width, height, scale);
-                let buffer = device.create_buffer_with_data(pixi::cast_slice(&data), usage);
-                self.layout.bind_projection(device, &buffer)
-            };
-
-            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &target.view,
-                    resolve_target: None,
-                    load_op: wgpu::LoadOp::Load,
-                    store_op: wgpu::StoreOp::Store,
-                    clear_color: wgpu::Color::BLACK,
-                }],
-                depth_stencil_attachment: None,
-            });
+            let mut rpass = target.rpass(&mut encoder);
 
             rpass.set_vertex_buffer(0, &self.quad.vtx_buffer, 0, 0);
             rpass.set_index_buffer(&self.quad.idx_buffer, 0, 0);
@@ -264,8 +251,8 @@ impl pixi::app::Game for Blending {
 
             rpass.set_viewport(x, y, w, h, 0.0, 1.0);
 
-            draw_quad(&mut rpass, &self.replace_pipeline, &self.bg_bind_group);
-            draw_quad(&mut rpass, &self.normal_pipeline, &self.target.bind_group);
+            draw_quad(&mut rpass, &self.replace.pipeline, &self.bg_bind_group);
+            draw_quad(&mut rpass, &self.normal.pipeline, &self.target.bind_group);
 
             drop(rpass);
         }

@@ -1,15 +1,16 @@
 mod swap_chain;
 
 pub use winit;
+pub use winit::{
+    dpi::{LogicalSize, PhysicalSize},
+    event::WindowEvent,
+    event_loop::{ControlFlow, EventLoop},
+    window::{Window, WindowBuilder},
+};
 
 use crate::app::swap_chain::SwapChain;
 use crate::target::Target;
-use winit::{
-    dpi::PhysicalSize,
-    event::{Event, StartCause, WindowEvent},
-    event_loop::{ControlFlow, EventLoop},
-    window::Window,
-};
+use winit::event::{Event, StartCause};
 
 pub struct Options {
     pub power_preference: wgpu::PowerPreference,

@@ -1,119 +1,123 @@
-#[derive(Clone, Copy)]
-struct Transform {
-    pub a: f32,
-    pub b: f32,
-    pub c: f32,
-    pub d: f32,
-    pub tx: f32,
-    pub ty: f32,
-}
+use crate::math::{Frame, Matrix, Point};
 
-struct Anchor {
-    x: f32,
-    y: f32,
-}
+pub mod animation;
+pub mod renderer;
+pub mod spritesheet;
 
-impl Default for Anchor {
-    fn default() -> Self {
-        Self { x: 0.5, y: 0.5 }
-    }
-}
+pub use self::{animation::Animation, renderer::SpritePipeline};
 
-#[derive(Default)]
-struct Size {
+//const DEFAULT_UV: [[f32; 2]; 4] = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+//const INDICES: [u16; 6] = [0, 1, 2, 0, 2, 3];
+
+pub struct Texture {
+    //bind_group: ImageBindGroup,
+    trim: Option<Frame>,
     width: f32,
     height: f32,
 }
 
-struct Rect {
-    x: f32,
-    y: f32,
-    w: f32,
-    h: f32,
-}
-
 pub struct Sprite {
-    world_transform: Transform,
+    transform: Matrix,
+    anchor: Point,
+    texture: Texture,
+    round_to: Option<f32>,
 }
 
 impl Sprite {
-    pub fn calculate_vertices(&mut self, round: Option<f32>) {
-        /*
-        const texture = this._texture;
-
-        if (this._transformID === this.transform._worldID && this._textureID === texture._updateID)
-        {
-            return;
-        }
-
-        // update texture UV here, because base texture can be changed without calling `_onTextureUpdate`
-        if (this._textureID !== texture._updateID)
-        {
-            this.uvs = this._texture._uvs.uvsFloat32;
-        }
-
-        this._transformID = this.transform._worldID;
-        this._textureID = texture._updateID;
-        */
-
-        // set the vertex data
-
-        let wt = self.world_transform;
-        let a = wt.a;
-        let b = wt.b;
-        let c = wt.c;
-        let d = wt.d;
-        let tx = wt.tx;
-        let ty = wt.ty;
-
-        /*
-        let vertexData = this.vertexData;
-        let trim = texture.trim;
-        let orig = texture.orig;
-        let anchor = this.anchor;
-        */
-
-        let anchor = Anchor::default();
-        let orig = Size::default();
-
-        let trim: Option<Rect> = None;
-
-        let (w0, w1, h0, h1);
-        if let Some(trim) = trim {
-            // if the sprite is trimmed and is not a tilingsprite then we need to add the extra
-            // space before transforming the sprite coords.
-            w1 = trim.x - (anchor.x * orig.width);
-            w0 = w1 + trim.w;
-
-            h1 = trim.y - (anchor.y * orig.height);
-            h0 = h1 + trim.h;
-        } else {
-            w1 = -anchor.x * orig.width;
-            w0 = w1 + orig.width;
-
-            h1 = -anchor.y * orig.height;
-            h0 = h1 + orig.height;
-        }
-
-        let mut vertex_data = [
-            // xy 11
-            (a * w1) + (c * h1) + tx,
-            (d * h1) + (b * w1) + ty,
-            // xy 10
-            (a * w1) + (c * h0) + tx,
-            (d * h0) + (b * w1) + ty,
-            // xy 00
-            (a * w0) + (c * h0) + tx,
-            (d * h0) + (b * w0) + ty,
-            // xy 01
-            (a * w0) + (c * h1) + tx,
-            (d * h1) + (b * w0) + ty,
-        ];
-
-        if let Some(scale) = round {
-            for v in &mut vertex_data {
-                *v = ((*v * scale.floor()) / scale).round();
-            }
+    pub fn new(texture: Texture) -> Self {
+        Self {
+            transform: Matrix::IDENTITY,
+            anchor: Point { x: 0.5, y: 0.5 },
+            texture,
+            round_to: None,
         }
     }
+
+    #[must_use]
+    pub fn with_anchor(self, anchor: Point) -> Self {
+        Self { anchor, ..self }
+    }
+
+    #[must_use]
+    pub fn with_round(self, scale: f32) -> Self {
+        let round_to = Some(scale);
+        Self { round_to, ..self }
+    }
+
+    #[must_use]
+    pub fn with_transform(self, transform: Matrix) -> Self {
+        Self { transform, ..self }
+    }
+
+    pub fn set_anchor(&mut self, anchor: Point) {
+        self.anchor = anchor;
+    }
+
+    pub fn set_round(&mut self, round_to: Option<f32>) {
+        self.round_to = round_to;
+    }
+
+    pub fn set_transform(&mut self, transform: Matrix) {
+        self.transform = transform;
+    }
+
+    pub fn vertices(&self) -> [[f32; 2]; 4] {
+        let wt = &self.transform;
+        let (tw, th) = (self.texture.width, self.texture.height);
+
+        let mut vertices = if let Some(trim) = self.texture.trim {
+            untrimmed_vertices(wt, self.anchor, tw, th, trim)
+        } else {
+            trimmed_vertices(wt, self.anchor, tw, th)
+        };
+
+        if let Some(scale) = self.round_to {
+            round_vertices(&mut vertices, scale)
+        }
+
+        vertices
+    }
+}
+
+pub fn round_vertices(vertices: &mut [[f32; 2]; 4], scale: f32) {
+    for [x, y] in vertices {
+        *x = ((*x * scale.floor()) / scale).round();
+        *y = ((*y * scale.floor()) / scale).round();
+    }
+}
+
+pub fn untrimmed_vertices(
+    wt: &Matrix,
+    anchor: Point,
+    tw: f32,
+    th: f32,
+    trim: Frame,
+) -> [[f32; 2]; 4] {
+    let w1 = trim.x - (anchor.x * tw);
+    let w0 = w1 + trim.w;
+
+    let h1 = trim.y - (anchor.y * th);
+    let h0 = h1 + trim.h;
+
+    [
+        wt.apply(w1, h1),
+        wt.apply(w0, h1),
+        wt.apply(w0, h0),
+        wt.apply(w1, h0),
+    ]
+}
+
+pub fn trimmed_vertices(wt: &Matrix, anchor: Point, tw: f32, th: f32) -> [[f32; 2]; 4] {
+    let w1 = -anchor.x * tw;
+    let h1 = -anchor.y * th;
+
+    let w0 = w1 + tw;
+    let h0 = h1 + th;
+
+    [
+        wt.apply(w1, h1),
+        wt.apply(w0, h1),
+        wt.apply(w0, h0),
+        wt.apply(w1, h0),
+    ]
 }

@@ -62,4 +62,13 @@ impl Blend {
             },
         }
     }
+
+    pub const fn into_color_state(self, format: wgpu::TextureFormat) -> wgpu::ColorStateDescriptor {
+        wgpu::ColorStateDescriptor {
+            format,
+            alpha_blend: self.alpha,
+            color_blend: self.color,
+            write_mask: wgpu::ColorWrite::ALL,
+        }
+    }
 }

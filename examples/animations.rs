@@ -1,8 +1,9 @@
 use pixi::{
-    app::winit::{dpi::PhysicalSize, event::WindowEvent, event_loop::ControlFlow},
+    app::{ControlFlow, EventLoop, PhysicalSize, Window, WindowEvent},
     batch::Batch,
     blend,
     image::{Image, ImageLoader},
+    layout::Layout,
     sprite::Animation,
     target::Target,
     wgpu,
@@ -10,8 +11,8 @@ use pixi::{
 use std::time::Instant;
 
 fn main() {
-    let event_loop = winit::event_loop::EventLoop::new();
-    let window = winit::window::Window::new(&event_loop).unwrap();
+    let event_loop = EventLoop::new();
+    let window = Window::new(&event_loop).unwrap();
     window.set_title("Animations Example");
 
     pixi::app::run::<Animations>(event_loop, window, Default::default());
@@ -22,6 +23,7 @@ struct Animations {
     batches: Vec<Batch>,
     anim: Animation<()>,
     ticker: Instant,
+    layout: Layout,
 }
 
 impl pixi::app::Game for Animations {
@@ -34,7 +36,7 @@ impl pixi::app::Game for Animations {
         _size: PhysicalSize<u32>,
         _scale_factor: f64,
     ) -> Self {
-        let images = [
+        let path = [
             "examples/assets/rabbit/rabbit.png",
             "examples/assets/rabbit/rabbit_ash.png",
             "examples/assets/rabbit/rabbit_batman.png",
@@ -50,15 +52,20 @@ impl pixi::app::Game for Animations {
         ];
 
         let mut loader = ImageLoader::new(device);
-        let images: Vec<Image> = images
+        let images: Vec<Image> = path
             .iter()
             .map(|path| loader.srgb_premul(device, path).unwrap())
             .collect();
         queue.submit(&[loader.finish()]);
 
+        let sampler = pixi::nearest_sampler(device);
+        let layout = Layout::new(device);
         let batches: Vec<Batch> = images
             .iter()
-            .map(|image| Batch::new(device, format, blend::PMA_NORMAL, &image.texture))
+            .map(|image| {
+                let image = layout.bind_image(device, &image, &sampler);
+                Batch::new(device, &layout, format, blend::PMA_NORMAL, image)
+            })
             .collect();
 
         let mut anim = Animation::new(vec![(); batches.len()], Vec::new());
@@ -70,6 +77,7 @@ impl pixi::app::Game for Animations {
             batches,
             anim,
             ticker: Instant::now(),
+            layout,
         }
     }
 
@@ -109,7 +117,7 @@ impl pixi::app::Game for Animations {
         let max = [x + w, y + h];
 
         batch.add_sprite(min, max);
-        batch.flush(&mut encoder, &device, &target);
+        batch.flush(&mut encoder, &device, &self.layout, &target);
 
         queue.submit(&[encoder.finish()]);
     }

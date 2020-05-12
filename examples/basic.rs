@@ -1,15 +1,16 @@
 use pixi::{
-    app::winit::{dpi::PhysicalSize, event::WindowEvent, event_loop::ControlFlow},
+    app::{ControlFlow, EventLoop, PhysicalSize, Window, WindowEvent},
     batch::Batch,
     blend,
     image::{Image, ImageLoader},
+    layout::Layout,
     target::Target,
     wgpu,
 };
 
 fn main() {
-    let event_loop = winit::event_loop::EventLoop::new();
-    let window = winit::window::Window::new(&event_loop).unwrap();
+    let event_loop = EventLoop::new();
+    let window = Window::new(&event_loop).unwrap();
     window.set_title("Basic Example");
 
     pixi::app::run::<Basic>(event_loop, window, Default::default());
@@ -19,6 +20,7 @@ struct Basic {
     batch: Batch,
     bunny: Image,
     x: [Batch; 3],
+    layout: Layout,
 }
 
 impl pixi::app::Game for Basic {
@@ -31,7 +33,7 @@ impl pixi::app::Game for Basic {
         _size: PhysicalSize<u32>,
         _scale_factor: f64,
     ) -> Self {
-        let images = [
+        let path = [
             "examples/assets/bunny.png",
             "examples/assets/blending/x-red.png",
             "examples/assets/blending/x-green.png",
@@ -39,20 +41,33 @@ impl pixi::app::Game for Basic {
         ];
 
         let mut loader = ImageLoader::new(device);
-        let bunny = loader.srgb_premul(device, images[0]).unwrap();
-        let xr = loader.srgb_premul(device, images[1]).unwrap();
-        let xg = loader.srgb_premul(device, images[2]).unwrap();
-        let xb = loader.srgb_premul(device, images[3]).unwrap();
+        let bunny = loader.srgb_premul(device, path[0]).unwrap();
+        let xr = loader.srgb_premul(device, path[1]).unwrap();
+        let xg = loader.srgb_premul(device, path[2]).unwrap();
+        let xb = loader.srgb_premul(device, path[3]).unwrap();
         queue.submit(&[loader.finish()]);
 
-        let batch = Batch::new(device, format, blend::PMA_NORMAL, &bunny.texture);
+        let layout = Layout::new(device);
+        let sampler = pixi::linear_sampler(device);
 
-        let xr = Batch::new(device, format, blend::PMA_NORMAL, &xr.texture);
-        let xg = Batch::new(device, format, blend::PMA_NORMAL, &xg.texture);
-        let xb = Batch::new(device, format, blend::PMA_NORMAL, &xb.texture);
+        let bunny_bind_group = layout.bind_image(device, &bunny, &sampler);
+        let xr_bind_group = layout.bind_image(device, &xr, &sampler);
+        let xg_bind_group = layout.bind_image(device, &xg, &sampler);
+        let xb_bind_group = layout.bind_image(device, &xb, &sampler);
+
+        let batch = Batch::new(device, &layout, format, blend::PMA_NORMAL, bunny_bind_group);
+
+        let xr = Batch::new(device, &layout, format, blend::PMA_NORMAL, xr_bind_group);
+        let xg = Batch::new(device, &layout, format, blend::PMA_NORMAL, xg_bind_group);
+        let xb = Batch::new(device, &layout, format, blend::PMA_NORMAL, xb_bind_group);
         let x = [xr, xg, xb];
 
-        Self { batch, bunny, x }
+        Self {
+            batch,
+            bunny,
+            x,
+            layout,
+        }
     }
 
     fn update(&mut self, event: WindowEvent, control_flow: &mut ControlFlow) {
@@ -78,7 +93,8 @@ impl pixi::app::Game for Basic {
         let max = [x + w, y + h];
 
         self.batch.add_sprite(min, max);
-        self.batch.flush(&mut encoder, &device, &target);
+        self.batch
+            .flush(&mut encoder, &device, &self.layout, &target);
 
         for (i, batch) in self.x.iter_mut().enumerate() {
             let (w, h) = (12.0, 12.0);
@@ -87,7 +103,7 @@ impl pixi::app::Game for Basic {
             let min = [x, y];
             let max = [x + w, y + h];
             batch.add_sprite(min, max);
-            batch.flush(&mut encoder, &device, &target);
+            batch.flush(&mut encoder, &device, &self.layout, &target);
         }
 
         queue.submit(&[encoder.finish()]);

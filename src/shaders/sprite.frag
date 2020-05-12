@@ -13,6 +13,5 @@ layout(set = 1, binding = 1) uniform sampler s_Color;
 
 void main() {
     vec4 color = texture(sampler2D(t_Color, s_Color), vertex.tex_coord);
-    color.rgb *= color.a;
     o_Target = color;
 }
